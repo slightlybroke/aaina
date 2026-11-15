@@ -52,6 +52,7 @@ Map<String, dynamic> routine() => {
 
 class TrackingApi extends AnalysisApi {
   bool fail = false;
+  String? failPath;
   Completer<void>? gate;
   List<Map<String, dynamic>> rows = [];
   List<dynamic> journal = [];
@@ -60,7 +61,7 @@ class TrackingApi extends AnalysisApi {
   @override
   Future<dynamic> get(String path) async {
     if (gate != null) await gate!.future;
-    if (fail) throw ApiException('Tracking is unavailable');
+    if (fail || path == failPath) throw ApiException('Tracking is unavailable');
     if (path.startsWith('/v1/skincare/routines')) {
       return {
         'today': '2026-10-26',
@@ -369,6 +370,39 @@ void main() {
     expect(api.writes.single['data']['steps'].length, 1);
     expect(api.writes.single['data']['steps'][0]['id'], sid);
   });
+  testWidgets('Scan history failure still allows routine check-ins', (
+    tester,
+  ) async {
+    final api = TrackingApi()
+      ..failPath = '/v1/analyses'
+      ..rows = [routine()];
+    await open(
+      tester,
+      SkincareHome(client: ClientStub(), apiUrl: 'http://test', api: api),
+    );
+    expect(find.text('Latest scan unavailable.'), findsOneWidget);
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Cleanser'));
+    await tester.pumpAndSettle();
+    expect(api.writes.single['data']['completed_steps'], [sid]);
+  });
+
+  testWidgets('Today shortcut opens the skin analysis flow', (tester) async {
+    final client = ClientStub();
+    await open(
+      tester,
+      SkincareHome(client: client, apiUrl: 'http://test', api: TrackingApi()),
+    );
+    await tester.tap(find.text('Open skin analysis'));
+    await tester.pump();
+    expect(find.text('A closer look at your skin'), findsOneWidget);
+    expect(find.text('Choose photo'), findsOneWidget);
+    expect(find.byTooltip('Digital vanity'), findsOneWidget);
+    await tester.tap(find.text('Today'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Today’s routines'), findsOneWidget);
+  });
+
   testWidgets('Check-ins complete individual steps and can be corrected', (
     tester,
   ) async {

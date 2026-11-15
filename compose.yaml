@@ -1,0 +1,26 @@
+x-backend: &backend
+  image: aaina-backend
+  build: ./backend
+  env_file: ./backend/.env
+  restart: unless-stopped
+  init: true
+
+services:
+  api:
+    <<: *backend
+    ports:
+      - "127.0.0.1:${AAINA_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  scan-worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+  try-on-worker:
+    <<: *backend
+    command: ["python", "-m", "app.vto_worker"]
+  weekly-worker:
+    <<: *backend
+    command: ["python", "-m", "app.weekly_worker"]

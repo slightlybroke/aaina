@@ -8,10 +8,13 @@ class MemoryRepository:
 
     def __init__(self):
         self.jobs, self.analyses, self.objects = {}, [], {}
+        self.deletion_requests = set()
         self.uploads = 0
         self.delete_fails = False
 
     async def owned(self, table, user_id, **filters):
+        if table == "account_deletion_requests":
+            return [{"user_id": user_id}] if user_id in self.deletion_requests else []
         rows = list(self.jobs.values()) if table == "analysis_jobs" else self.analyses
         return deepcopy(
             [
@@ -21,6 +24,9 @@ class MemoryRepository:
                 and all(row.get(k) == v[3:] for k, v in filters.items() if v.startswith("eq."))
             ]
         )
+
+    async def request_account_deletion(self, user_id):
+        self.deletion_requests.add(user_id)
 
     async def insert_job(self, job):
         if any(

@@ -7,9 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import 'api.dart';
+import 'auth_page.dart';
 import 'camera_capture.dart';
 import 'photo_input.dart';
-import 'skincare_home.dart';
 
 const appName = String.fromEnvironment('APP_NAME', defaultValue: 'aaina');
 
@@ -50,7 +50,14 @@ class BeautyApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: appName,
     theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff416d60)),
+      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff5e7a68))
+          .copyWith(
+            primary: const Color(0xff466150),
+            surface: const Color(0xfffff8f5),
+            onSurface: const Color(0xff1f1b18),
+            surfaceContainerLow: const Color(0xfffcf2ec),
+            surfaceContainer: const Color(0xfff6ece7),
+          ),
       useMaterial3: true,
       inputDecorationTheme: const InputDecorationTheme(
         border: OutlineInputBorder(),
@@ -60,143 +67,13 @@ class BeautyApp extends StatelessWidget {
   );
 }
 
-class AuthGate extends StatelessWidget {
-  final SupabaseClient client;
-  final String apiUrl;
-  const AuthGate({super.key, required this.client, required this.apiUrl});
-  @override
-  Widget build(BuildContext context) => StreamBuilder<AuthState>(
-    stream: client.auth.onAuthStateChange,
-    builder: (context, snapshot) => client.auth.currentSession == null
-        ? SignIn(client: client)
-        : SkincareHome(
-            key: ValueKey(client.auth.currentUser!.id),
-            client: client,
-            apiUrl: apiUrl,
-          ),
-  );
-}
-
-class SignIn extends StatefulWidget {
-  final SupabaseClient client;
-  const SignIn({super.key, required this.client});
-  @override
-  State<SignIn> createState() => _SignInState();
-}
-
-class _SignInState extends State<SignIn> {
-  final email = TextEditingController(), password = TextEditingController();
-  bool busy = false;
-  String? message;
-  Future<void> authenticate(bool register) async {
-    setState(() {
-      busy = true;
-      message = null;
-    });
-    try {
-      if (register) {
-        final result = await widget.client.auth.signUp(
-          email: email.text.trim(),
-          password: password.text,
-        );
-        if (result.session == null && mounted) {
-          setState(() => message = 'Confirm your email, then sign in.');
-        }
-      } else {
-        await widget.client.auth.signInWithPassword(
-          email: email.text.trim(),
-          password: password.text,
-        );
-      }
-    } on AuthException catch (e) {
-      if (mounted) setState(() => message = e.message);
-    } catch (_) {
-      if (mounted) {
-        setState(
-          () => message = 'Unable to connect. Check your connection and retry.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    email.dispose();
-    password.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text(appName)),
-    body: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.all(24),
-          children: [
-            Center(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: Image.asset(
-                  'assets/branding/aaina.png',
-                  width: 112,
-                  height: 112,
-                  semanticLabel: 'aaina mirror logo',
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              'Understand your skin',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Sign in to keep your analysis history in your account.',
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              controller: email,
-              keyboardType: TextInputType.emailAddress,
-              autofillHints: const [AutofillHints.email],
-              decoration: const InputDecoration(labelText: 'Email'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: password,
-              obscureText: true,
-              autofillHints: const [AutofillHints.password],
-              decoration: const InputDecoration(labelText: 'Password'),
-            ),
-            if (message != null)
-              Padding(padding: const EdgeInsets.all(12), child: Text(message!)),
-            const SizedBox(height: 16),
-            if (busy) const LinearProgressIndicator(),
-            FilledButton(
-              onPressed: busy ? null : () => authenticate(false),
-              child: const Text('Sign in'),
-            ),
-            TextButton(
-              onPressed: busy ? null : () => authenticate(true),
-              child: const Text('Create account'),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
 class ScanHome extends StatefulWidget {
   final SupabaseClient client;
   final String apiUrl;
   final AnalysisApi? api;
   final PhotoInput? photoInput;
   final WidgetBuilder? captureBuilder;
+  final bool standalone;
   const ScanHome({
     super.key,
     required this.client,
@@ -204,6 +81,7 @@ class ScanHome extends StatefulWidget {
     this.api,
     this.photoInput,
     this.captureBuilder,
+    this.standalone = true,
   });
   @override
   State<ScanHome> createState() => _ScanHomeState();
@@ -225,7 +103,7 @@ class _ScanHomeState extends State<ScanHome> {
   @override
   void initState() {
     super.initState();
-    unawaited(refresh());
+    unawaited(refresh(resumePending: true));
     unawaited(recoverSelection());
   }
 
@@ -246,7 +124,7 @@ class _ScanHomeState extends State<ScanHome> {
     }
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh({bool resumePending = false}) async {
     if (mounted) {
       setState(() {
         loading = true;
@@ -262,7 +140,20 @@ class _ScanHomeState extends State<ScanHome> {
         setState(() {
           history = results[0] as List;
           jobs = results[1] as List;
+          if (resumePending && job == null) {
+            for (final item in jobs.whereType<Map>()) {
+              if ([
+                'pending',
+                'submitting',
+                'processing',
+              ].contains(item['status'])) {
+                job = Map<String, dynamic>.from(item);
+                break;
+              }
+            }
+          }
         });
+        if (resumePending && job != null && timer == null) watch();
       }
     } catch (e) {
       showError(e);
@@ -402,15 +293,17 @@ class _ScanHomeState extends State<ScanHome> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text(appName),
-      actions: [
-        TextButton(
-          onPressed: busy ? null : signOut,
-          child: const Text('Sign out'),
-        ),
-      ],
-    ),
+    appBar: widget.standalone
+        ? AppBar(
+            title: const Text('Skin analysis'),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : signOut,
+                child: const Text('Sign out'),
+              ),
+            ],
+          )
+        : null,
     body: Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(

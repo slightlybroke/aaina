@@ -352,7 +352,6 @@ void main() {
         ),
       );
       expect(find.byTooltip('Digital vanity'), findsOneWidget);
-      expect(find.text('Open digital vanity'), findsOneWidget);
       for (final name in [
         'Today',
         'Routines',

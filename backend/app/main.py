@@ -71,6 +71,16 @@ def create_app(settings=None, repository=None, client=None):
     async def health():
         return {"status": "ok", "provider_verification": "live_pending"}
 
+    @app.get("/v1/account/deletion-request")
+    async def account_deletion_status(user_id=Depends(authenticated_user)):
+        rows = await repo.owned("account_deletion_requests", user_id, select="requested_at")
+        return {"requested": bool(rows)}
+
+    @app.post("/v1/account/deletion-request", status_code=202)
+    async def request_account_deletion(user_id=Depends(authenticated_user)):
+        await repo.request_account_deletion(user_id)
+        return {"requested": True}
+
     @app.post("/v1/analyses", status_code=202)
     async def create_analysis(
         image: UploadFile = File(),

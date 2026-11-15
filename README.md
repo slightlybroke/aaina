@@ -44,6 +44,9 @@ Education and automatic memory capture are deliberately narrow; discovery is a s
 catalogue, not a retailer search engine. Generic VTO is not an exact retail-product reproduction.
 No MCP adapter, push notifications or medical diagnosis is included.
 
+See the [public launch runbook](docs/launch.md) for the web host, signed Android
+APK, GitHub release workflow, account deletion operations, and acceptance checks.
+
 Feature contracts:
 [routines](docs/phase2.md), [vanity](docs/phase3-vanity.md),
 [Gemini](docs/phase3-gemini.md), [voice](docs/phase3-live-voice.md),

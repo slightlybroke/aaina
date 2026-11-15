@@ -69,6 +69,22 @@ async def test_retry_returns_same_job_without_reupload(api, photo):
     assert "external_task_id" not in first.json()
 
 
+async def test_deletion_request_uses_verified_owner_and_is_idempotent(api):
+    client, repo = api
+    path = "/v1/account/deletion-request"
+    alice = {"Authorization": "Bearer alice"}
+    bob = {"Authorization": "Bearer bob"}
+    assert (await client.post(path)).status_code == 401
+    assert (await client.get(path, headers=alice)).json() == {"requested": False}
+    for _ in range(2):
+        response = await client.post(path, headers=alice, json={"user_id": B})
+        assert response.status_code == 202
+        assert response.json() == {"requested": True}
+    assert repo.deletion_requests == {A}
+    assert (await client.get(path, headers=alice)).json() == {"requested": True}
+    assert (await client.get(path, headers=bob)).json() == {"requested": False}
+
+
 async def test_retry_different_content_conflicts(api, photo):
     client, repo = api
     key = str(uuid4())

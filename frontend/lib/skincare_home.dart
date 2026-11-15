@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'aaina_brand.dart';
+import 'account_page.dart';
 import 'api.dart';
 import 'journal_editor.dart';
-import 'main.dart' show ScanHome, appName;
+import 'main.dart' show ScanHome;
 import 'routine_editor.dart';
 import 'skin_progress.dart';
 import 'vanity_page.dart';
 import 'weekly_reports_page.dart';
+
+enum TrackingData { routines, history, journal, analyses }
 
 class SkincareHome extends StatefulWidget {
   final SupabaseClient client;
@@ -31,6 +35,7 @@ class _SkincareHomeState extends State<SkincareHome> {
   bool loading = true, busy = false, moreAnalyses = false, moreJournal = false;
   bool scanOpened = false;
   String? error, day;
+  final loadErrors = <TrackingData, String>{};
   DateTimeRange? range;
   int loadGeneration = 0;
   @override
@@ -48,42 +53,76 @@ class _SkincareHomeState extends State<SkincareHome> {
 
   List<Map<String, dynamic>> maps(dynamic rows) =>
       (rows as List).map((r) => Map<String, dynamic>.from(r)).toList();
+
+  Future<void> load(
+    TrackingData data,
+    String path,
+    int generation,
+    void Function(dynamic) apply,
+  ) async {
+    try {
+      final value = await api.get(path);
+      if (mounted && generation == loadGeneration) setState(() => apply(value));
+    } catch (e) {
+      if (mounted && generation == loadGeneration) {
+        setState(() {
+          loadErrors[data] = e is ApiException
+              ? e.message
+              : 'Could not load ${data.name}. Try again.';
+        });
+      }
+    }
+  }
+
   Future<void> refresh() async {
     final generation = ++loadGeneration;
     setState(() {
       loading = true;
       error = null;
+      loadErrors.clear();
     });
     try {
-      final responses = await Future.wait([
-        api.get('/v1/skincare/routines${day == null ? '' : '?day=$day'}'),
-        api.get(
-          '/v1/skincare/history${range == null ? '' : '?start=${date(range!.start)}&end=${date(range!.end)}'}',
+      await Future.wait([
+        load(
+          TrackingData.routines,
+          '/v1/skincare/routines${day == null ? '' : '?day=$day'}',
+          generation,
+          (value) => routines = Map<String, dynamic>.from(value),
         ),
-        api.get('/v1/skincare/journal'),
-        api.get('/v1/analyses'),
-      ]);
-      if (mounted && generation == loadGeneration) {
-        setState(() {
-          routines = Map<String, dynamic>.from(responses[0]);
-          history = Map<String, dynamic>.from(responses[1]);
-          journal = maps(responses[2]);
-          analyses = maps(responses[3]);
+        load(
+          TrackingData.history,
+          '/v1/skincare/history${range == null ? '' : '?start=${date(range!.start)}&end=${date(range!.end)}'}',
+          generation,
+          (value) => history = Map<String, dynamic>.from(value),
+        ),
+        load(TrackingData.journal, '/v1/skincare/journal', generation, (value) {
+          journal = maps(value);
           moreJournal = journal.length == 50;
+        }),
+        load(TrackingData.analyses, '/v1/analyses', generation, (value) {
+          analyses = maps(value);
           moreAnalyses = analyses.length == 50;
-        });
-      }
-    } catch (e) {
-      if (mounted && generation == loadGeneration) {
-        setState(
-          () => error = e is ApiException ? e.message : 'Unable to load your tracking data. Check your connection and retry.',
-        );
-      }
+        }),
+      ]);
     } finally {
       if (mounted && generation == loadGeneration) {
         setState(() => loading = false);
       }
     }
+  }
+
+  Iterable<String> get visibleErrors {
+    final sections = switch (tab) {
+      0 => [TrackingData.routines, TrackingData.analyses],
+      1 => [TrackingData.routines, TrackingData.history],
+      2 => [TrackingData.journal],
+      3 => [TrackingData.analyses],
+      _ => <TrackingData>[],
+    };
+    return {
+      error,
+      for (final section in sections) loadErrors[section],
+    }.whereType<String>();
   }
 
   String date(DateTime value) => value.toIso8601String().substring(0, 10);
@@ -267,29 +306,49 @@ class _SkincareHomeState extends State<SkincareHome> {
     }, reload: false);
   }
 
+  void selectTab(int destination) {
+    if (tab == destination) return;
+    final needsRefresh = tab == 4 || day != null;
+    setState(() {
+      tab = destination;
+      if (destination == 4) scanOpened = true;
+      day = null;
+    });
+    if (destination != 4 && needsRefresh) {
+      refresh();
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: tab == 4
-        ? null
-        : AppBar(
-            title: const Text(appName),
-            actions: [
-              IconButton(
-                tooltip: 'Digital vanity',
-                onPressed: openVanity,
-                icon: const Icon(Icons.inventory_2_outlined),
+    appBar: AppBar(
+      title: const AainaWordmark(),
+      actions: [
+        IconButton(
+          tooltip: 'Digital vanity',
+          onPressed: openVanity,
+          icon: const Icon(Icons.inventory_2_outlined),
+        ),
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: tab == 4 || loading || busy ? null : refresh,
+          icon: const Icon(Icons.refresh),
+        ),
+        IconButton(
+          tooltip: 'Account',
+          icon: const Icon(Icons.person_outline),
+          onPressed: () => Navigator.push<void>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AccountPage(
+                api: api,
+                signOut: () => widget.client.auth.signOut(),
               ),
-              IconButton(
-                tooltip: 'Refresh',
-                onPressed: loading || busy ? null : refresh,
-                icon: const Icon(Icons.refresh),
-              ),
-              TextButton(
-                onPressed: () => widget.client.auth.signOut(),
-                child: const Text('Sign out'),
-              ),
-            ],
+            ),
           ),
+        ),
+      ],
+    ),
     body: IndexedStack(
       index: tab == 4 ? 1 : 0,
       children: [
@@ -297,16 +356,23 @@ class _SkincareHomeState extends State<SkincareHome> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
             child: ListView(
+              key: PageStorageKey(tab),
               padding: const EdgeInsets.all(20),
               children: [
+                if (tab == 3)
+                  WeeklyReportsShortcut(
+                    key: ValueKey(loadGeneration),
+                    api: api,
+                    open: () => openVanity(reports: true),
+                  ),
                 if (loading || busy) const LinearProgressIndicator(),
-                if (error != null)
+                if (visibleErrors.isNotEmpty)
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
                         children: [
-                          Text(error!),
+                          for (final message in visibleErrors) Text(message),
                           TextButton(
                             onPressed: loading || busy ? null : refresh,
                             child: const Text('Retry loading'),
@@ -315,20 +381,13 @@ class _SkincareHomeState extends State<SkincareHome> {
                       ),
                     ),
                   ),
-                if (!loading && error == null && routines != null) ...[
-                  Text(
-                    'Tracking timezone: ${routines!['timezone']} · Today: ${routines!['today']}',
-                  ),
-                  if (routines!['timezone_locked'] != true)
-                    TextButton(
-                      onPressed: busy ? null : timezone,
-                      child: const Text('Choose tracking timezone'),
-                    ),
-                  const SizedBox(height: 16),
+                if (!loading) ...[
                   if (tab == 0) ...dashboard(),
-                  if (tab == 1) ...routinePage(),
-                  if (tab == 2) ...journalPage(),
-                  if (tab == 3)
+                  if (tab == 1 && routines != null) ...routinePage(),
+                  if (tab == 2 && !loadErrors.containsKey(TrackingData.journal))
+                    ...journalPage(),
+                  if (tab == 3 &&
+                      !loadErrors.containsKey(TrackingData.analyses))
                     SkinProgress(
                       analyses: analyses,
                       loadMore: moreAnalyses && !busy
@@ -340,22 +399,17 @@ class _SkincareHomeState extends State<SkincareHome> {
             ),
           ),
         ),
-        if (scanOpened) ScanHome(client: widget.client, apiUrl: widget.apiUrl),
+        if (scanOpened)
+          ScanHome(
+            client: widget.client,
+            apiUrl: widget.apiUrl,
+            standalone: false,
+          ),
       ],
     ),
     bottomNavigationBar: NavigationBar(
       selectedIndex: tab,
-      onDestinationSelected: (v) {
-        final leavingScan = tab == 4 && v != 4;
-        setState(() {
-          tab = v;
-          if (v == 4) scanOpened = true;
-        });
-        if (v != 4 && (day != null || leavingScan)) {
-          day = null;
-          refresh();
-        }
-      },
+      onDestinationSelected: selectTab,
       destinations: const [
         NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Today'),
         NavigationDestination(icon: Icon(Icons.checklist), label: 'Routines'),
@@ -366,27 +420,66 @@ class _SkincareHomeState extends State<SkincareHome> {
     ),
   );
   List<Widget> dashboard() {
-    final todayRows = day == null
+    final todayRows = day == null && routines != null
         ? maps(routines!['routines'])
               .where((r) => r['scheduled'] == true)
               .toList()
         : <Map<String, dynamic>>[];
     return [
-      WeeklyReportsShortcut(
-        key: ValueKey(loadGeneration),
-        api: api,
-        open: () => openVanity(reports: true),
+      Card(
+        color: const Color(0xfff6ece7),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Your skin today',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      loadErrors.containsKey(TrackingData.analyses) &&
+                              analyses.isEmpty
+                          ? 'Latest scan unavailable.'
+                          : analyses.isEmpty
+                          ? 'No skin analyses yet.'
+                          : 'Latest scan · ${scoreText(analyses.first['overall_score'])} / 100',
+                    ),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      onPressed: () => selectTab(4),
+                      child: const Text('Open skin analysis'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: Image.asset(
+                  'assets/branding/aaina.png',
+                  width: 74,
+                  height: 74,
+                  fit: BoxFit.cover,
+                  excludeFromSemantics: true,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-      OutlinedButton.icon(
-        onPressed: openVanity,
-        icon: const Icon(Icons.inventory_2_outlined),
-        label: const Text('Open digital vanity'),
-      ),
+      const SizedBox(height: 20),
       Text(
         'Today’s routines',
         style: Theme.of(context).textTheme.headlineSmall,
       ),
-      if (todayRows.isEmpty)
+      if (routines != null &&
+          todayRows.isEmpty &&
+          !loadErrors.containsKey(TrackingData.routines))
         const Text(
           'No scheduled routines today. Create a routine or review your schedule.',
         ),
@@ -395,30 +488,23 @@ class _SkincareHomeState extends State<SkincareHome> {
         onPressed: busy ? null : () => editRoutine(),
         child: const Text('Create routine'),
       ),
-      ...summary(),
+      const SizedBox(height: 12),
       FilledButton.tonal(
         onPressed: busy ? null : () => editJournal(),
         child: const Text('Log a skin concern'),
-      ),
-      const SizedBox(height: 16),
-      if (analyses.isEmpty) ...[
-        const Text('No skin analyses yet.'),
-        TextButton(
-          onPressed: () => setState(() => tab = 4),
-          child: const Text('Open skin analysis'),
-        ),
-      ] else ...[
-        const Text('Most recent skin analysis'),
-        SavedAnalysis(analysis: analyses.first),
-      ],
-      TextButton(
-        onPressed: () => setState(() => tab = 3),
-        child: const Text('View skin progress'),
       ),
     ];
   }
 
   List<Widget> routinePage() => [
+    Text('Skincare routines', style: Theme.of(context).textTheme.headlineSmall),
+    Text('Tracking timezone: ${routines!['timezone']}'),
+    if (routines!['timezone_locked'] != true)
+      TextButton(
+        onPressed: busy ? null : timezone,
+        child: const Text('Choose tracking timezone'),
+      ),
+    const SizedBox(height: 12),
     Wrap(
       spacing: 8,
       children: [
@@ -443,30 +529,31 @@ class _SkincareHomeState extends State<SkincareHome> {
     if ((routines!['routines'] as List).isEmpty)
       const Text('No routines yet. Build your own steps from scratch.'),
     for (final routine in maps(routines!['routines'])) routineCard(routine),
-    ...summary(),
-    ExpansionTile(
-      title: const Text('Completion history (scheduled routine days)'),
-      children: [
-        for (final state in maps(history!['days']))
-          ListTile(
-            title: Text(
-              '${state['local_date']} · ${state['definition']['name']}',
+    if (history != null) ...summary(),
+    if (history != null)
+      ExpansionTile(
+        title: const Text('Completion history (scheduled routine days)'),
+        children: [
+          for (final state in maps(history!['days']))
+            ListTile(
+              title: Text(
+                '${state['local_date']} · ${state['definition']['name']}',
+              ),
+              subtitle: Text(
+                '${state['completion']} · ${(state['completed_steps'] as List).length}/${(state['definition']['steps'] as List).length} steps',
+              ),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: busy
+                  ? null
+                  : () {
+                      day = state['local_date'];
+                      refresh();
+                    },
             ),
-            subtitle: Text(
-              '${state['completion']} · ${(state['completed_steps'] as List).length}/${(state['definition']['steps'] as List).length} steps',
-            ),
-            trailing: const Icon(Icons.edit_outlined),
-            onTap: busy
-                ? null
-                : () {
-                    day = state['local_date'];
-                    refresh();
-                  },
-          ),
-        if ((history!['days'] as List).isEmpty)
-          const ListTile(title: Text('No scheduled days in this period.')),
-      ],
-    ),
+          if ((history!['days'] as List).isEmpty)
+            const ListTile(title: Text('No scheduled days in this period.')),
+        ],
+      ),
   ];
   List<Widget> summary() {
     final value = history!['summary'] as Map;

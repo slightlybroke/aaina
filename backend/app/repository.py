@@ -30,6 +30,15 @@ class Supabase:
     async def owned(self, table, user_id, **filters):
         return await self.rows(table, user_id=f"eq.{user_id}", **filters)
 
+    async def request_account_deletion(self, user_id):
+        await self.request(
+            "POST",
+            "/rest/v1/account_deletion_requests",
+            params={"on_conflict": "user_id"},
+            json={"user_id": user_id},
+            headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+        )
+
     async def insert_job(self, job):
         response = await self.request(
             "POST",
